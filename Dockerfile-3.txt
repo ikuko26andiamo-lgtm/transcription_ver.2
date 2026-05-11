@@ -1,0 +1,24 @@
+FROM python:3.10
+
+WORKDIR /app
+
+# system packages
+RUN apt-get update && apt-get install -y \
+    libmecab-dev \
+    mecab-ipadic-utf8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# pip upgrade
+RUN pip install --no-cache-dir --upgrade pip
+
+# 旧SDK削除（超重要）
+RUN pip uninstall -y google-generativeai || true
+
+# install deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# copy app
+COPY . .
+
+CMD ["streamlit", "run", "app.py", "--server.port", "10000", "--server.address", "0.0.0.0"]
