@@ -18,19 +18,25 @@ def load_whisper_model():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     return WhisperModel("base", device=device, compute_type="float16" if device=="cuda" else "int8")
 
-def extract_terms(file):
+# キーワード抽出関数
+def extract_terms(file, top_n=100):
     doc = docx.Document(file)
     text = "\n".join([p.text for p in doc.paragraphs])
+
     tagger = MeCab.Tagger()
     node = tagger.parseToNode(text)
+
     terms = []
     while node:
         features = node.feature.split(',')
         if features[0] == "名詞":
             word = node.surface
-            if len(word) >= 2: terms.append(word)
+            if len(word) >= 2:
+                terms.append(word)
         node = node.next
-    return [t for t, _ in Counter(terms).most_common(100)]
+
+    # この return が def extract_terms の「中」にあるか確認！
+    return [term for term, count in Counter(terms).most_common(top_n)]
 
 # --- 音声 & Gemini 処理クラス ---
 class RealTimeGeminiProcessor(AudioProcessorBase):
