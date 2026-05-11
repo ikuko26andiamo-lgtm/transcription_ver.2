@@ -1,8 +1,0 @@
-streamlit
-python-docx
-mecab-python3
-unidic-lite
-torch
-requests
-faster-whisper
-google-generativeai==0.8.3

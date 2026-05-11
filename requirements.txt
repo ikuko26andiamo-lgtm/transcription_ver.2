@@ -1,0 +1,13 @@
+streamlit
+python-docx
+mecab-python3
+unidic-lite
+torch
+requests
+faster-whisper
+google-generativeai==0.8.3
+streamlit-webrtc
+faster-whisper
+mecab-python3
+numpy
+torch --index-url https://download.pytorch.org/whl/cpu  # GPUなし環境の場合
