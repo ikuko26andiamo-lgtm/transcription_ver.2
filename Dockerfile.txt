@@ -1,0 +1,41 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# 1. システムパッケージのインストール
+# webrtcの通信（PyAV）に必要なライブラリとMeCabを追加
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libmecab-dev \
+    mecab-ipadic-utf8 \
+    pkg-config \
+    libavdevice-dev \
+    libavfilter-dev \
+    libavformat-dev \
+    libavcodec-dev \
+    libswresample-dev \
+    libswscale-dev \
+    libavutil-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. pipのアップグレード
+RUN pip install --no-cache-dir --upgrade pip
+
+# 3. 依存関係のインストール
+COPY requirements.txt .
+# streamlit-webrtc や faster-whisper などをインストール
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 4. アプリケーションのコピー
+COPY . .
+
+# 5. ポートの設定
+# Streamlit用（10000）とWebRTCのシグナリング用などで必要になる場合があります
+EXPOSE 10000
+
+# 6. 起動コマンド
+# リアルタイム通信を安定させるため、いくつかオプションを推奨
+CMD ["streamlit", "run", "app.py", \
+     "--server.port", "10000", \
+     "--server.address", "0.0.0.0", \
+     "--browser.gatherUsageStats", "false"]
