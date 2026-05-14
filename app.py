@@ -8,7 +8,7 @@ from faster_whisper import WhisperModel
 import torch
 
 # --- 1. 基本設定 ---
-st.set_page_config(page_title="リアルタイム講義補正ノート📝", layout="wide")
+st.set_page_config(page_title="リアルタイム文字起こし📝", layout="wide")
 
 @st.cache_resource
 def load_whisper_model():
@@ -117,7 +117,7 @@ webrtc_ctx = webrtc_streamer(
 )
 
 # --- 5. 画面表示 ---
-st.subheader("📝 補正済み講義ノート")
+st.subheader("📝 補正済み講義文字起こし")
 output_area = st.empty()
 
 if webrtc_ctx.state.playing:
