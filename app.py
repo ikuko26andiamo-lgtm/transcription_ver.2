@@ -16,28 +16,34 @@ st.set_page_config(page_title="リアルタイム専門用語補正ノート📝
 def load_whisper_model():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     return WhisperModel("base", device=device, compute_type="float16" if device=="cuda" else "int8")
-
 def extract_terms(file, top_n=100):
     doc = docx.Document(file)
     text = "\n".join([p.text for p in doc.paragraphs])
-    dic_paths = [
+    
+    # 辞書候補（環境によって異なるため、網羅的に指定）
+    tagger = None
+    paths = [
         "/var/lib/mecab/dic/ipadic-utf8",
         "/usr/lib/x86_64-linux-gnu/mecab/dic/ipadic",
         "/usr/lib/x86_64-linux-gnu/mecab/dic/ipadic-utf8",
-        "/usr/local/lib/mecab/dic/ipadic"
+        "/usr/share/mecab/dic/ipadic",
+        "/etc/alternatives/mecab-dictionary"
     ]
-    tagger = None
-    for path in dic_paths:
+    
+    for p in paths:
         try:
-            t = MeCab.Tagger(f"-d {path}")
-            t.parse("") # テスト動作
+            t = MeCab.Tagger(f"-d {p}")
+            t.parse("") # 動作確認
             tagger = t
             break
         except:
             continue
             
     if tagger is None:
-        tagger = MeCab.Tagger() # 最終手段（デフォルト）
+        # 最終手段：それでもダメな場合は、Dockerfileに以下の1行があるか確認してください
+        # RUN apt-get install -y mecab mecab-ipadic-utf8
+        tagger = MeCab.Tagger() 
+
     node = tagger.parseToNode(text)
     terms = []
     while node:
