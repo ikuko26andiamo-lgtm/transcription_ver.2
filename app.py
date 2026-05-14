@@ -21,19 +21,13 @@ def load_whisper_model():
 def extract_terms(file, top_n=100):
     doc = docx.Document(file)
     text = "\n".join([p.text for p in doc.paragraphs])
-    tagger = MeCab.Tagger()
-    node = tagger.parseToNode(text)
-    terms = []
-    while node:
-        features = node.feature.split(',')
-        if features[0] == "名詞":
-            word = node.surface
-            # 3文字以上、またはカタカナを優先的に抽出
-            if len(word) >= 3 or any(0x30A0 <= ord(c) <= 0x30FF for c in word):
-                if len(word) >= 2:
-                    terms.append(word)
-        node = node.next
-    return [term for term, count in Counter(terms).most_common(top_n)]
+    
+    # 辞書のパスを明示的に指定（debian系の標準パス）
+    try:
+        tagger = MeCab.Tagger("-d /usr/lib/x86_64-linux-gnu/mecab/dic/mecab-ipadic-neologd")
+    except:
+        # neologdがない場合は標準のipadicを指定
+        tagger = MeCab.Tagger("-d /var/lib/mecab/dic/ipadic-utf8")
 
 # --- 音声 & Gemini 処理クラス ---
 class RealTimeGeminiProcessor(AudioProcessorBase):
