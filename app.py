@@ -7,10 +7,9 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 from faster_whisper import WhisperModel
 import torch
 
-# --- 1. 定数・基本設定 ---
+# --- 1. 基本設定 ---
 st.set_page_config(page_title="リアルタイム講義補正ノート📝", layout="wide")
 
-# --- 2. モデル・データ準備関数 ---
 @st.cache_resource
 def load_whisper_model():
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -40,16 +39,14 @@ def extract_terms_with_gemini(file, api_key, model_name):
     except:
         return ["法律", "政治", "憲法", "国際関係"]
 
-# --- 3. 音声処理クラス (ココがTypeErrorの鍵) ---
+# --- 2. 音声処理クラス ---
 class RealTimeGeminiProcessor(AudioProcessorBase):
-    # kwargsの中身と、ここの引数リストを「完全一致」させる
     def __init__(self, whisper_model, api_key, model_name, terms, persona):
         self.whisper_model = whisper_model
         self.terms = terms
         self.persona = persona
         self.audio_buffer = []
         self.result_queue = queue.Queue()
-        # クラス内で個別に設定
         genai.configure(api_key=api_key)
         self.gemini_model = genai.GenerativeModel(model_name)
 
@@ -74,7 +71,7 @@ class RealTimeGeminiProcessor(AudioProcessorBase):
                 pass
         return frame
 
-# --- 4. メイン UI ---
+# --- 3. メイン UI ---
 st.title("🎙️ リアルタイム講義補正ノート")
 
 with st.sidebar:
@@ -87,7 +84,6 @@ if not api_key or not uploaded_docx:
     st.info("APIキーと資料をセットしてください。")
     st.stop()
 
-# セッション状態の初期化
 if "model_name" not in st.session_state:
     st.session_state.model_name = get_working_model(api_key)
 if "terms" not in st.session_state:
@@ -95,33 +91,35 @@ if "terms" not in st.session_state:
 if "full_notes" not in st.session_state:
     st.session_state.full_notes = ""
 
-# --- 5. WebRTC ストリーマー (引数名を最新仕様に修正) ---
+# --- 4. WebRTC ストリーマー (最新仕様: audio_processor_factory) ---
+# クラスをインスタンス化して返す関数を定義
+def audio_processor_factory():
+    return RealTimeGeminiProcessor(
+        whisper_model=load_whisper_model(),
+        api_key=api_key,
+        model_name=st.session_state.model_name,
+        terms=st.session_state.terms,
+        persona=persona
+    )
+
 webrtc_ctx = webrtc_streamer(
     key="lecture-gemini",
     mode=WebRtcMode.SENDONLY,
     media_stream_constraints={"video": False, "audio": True},
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    
-    # 🔴 ここを修正: worker_class -> audio_processor_class
-    audio_processor_class=RealTimeGeminiProcessor,
-    
-    # 🔴 ここを修正: kwargs -> audio_processor_params
-    audio_processor_params={
-        "whisper_model": load_whisper_model(),
-        "api_key": api_key,
-        "model_name": st.session_state.model_name,
-        "terms": st.session_state.terms,
-        "persona": persona
-    },
+    # 🔴 ここが最新の指定方法です
+    audio_processor_factory=audio_processor_factory,
 )
 
-# --- 6. 画面表示 ---
-# --- 6. 画面表示部分の修正 ---
+# --- 5. 画面表示 ---
+st.subheader("📝 補正済み講義ノート")
+output_area = st.empty()
+
 if webrtc_ctx.state.playing:
     while True:
         try:
-            # 🔴 ここを修正: audio_worker -> audio_processor
-            if hasattr(webrtc_ctx, 'audio_processor') and webrtc_ctx.audio_processor:
+            # 最新仕様では audio_processor でアクセス
+            if webrtc_ctx.audio_processor:
                 new_line = webrtc_ctx.audio_processor.result_queue.get(timeout=1.0)
                 st.session_state.full_notes += new_line + "\n\n"
                 output_area.text_area("ノート", value=st.session_state.full_notes, height=500)
