@@ -95,15 +95,18 @@ if "terms" not in st.session_state:
 if "full_notes" not in st.session_state:
     st.session_state.full_notes = ""
 
-# --- 5. WebRTC ストリーマー (ココでkwargsを渡す) ---
+# --- 5. WebRTC ストリーマー (引数名を最新仕様に修正) ---
 webrtc_ctx = webrtc_streamer(
     key="lecture-gemini",
     mode=WebRtcMode.SENDONLY,
     media_stream_constraints={"video": False, "audio": True},
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    worker_class=RealTimeGeminiProcessor,
-    # 🔴 __init__ の引数名と完全に一致させる
-    kwargs={
+    
+    # 🔴 ここを修正: worker_class -> audio_processor_class
+    audio_processor_class=RealTimeGeminiProcessor,
+    
+    # 🔴 ここを修正: kwargs -> audio_processor_params
+    audio_processor_params={
         "whisper_model": load_whisper_model(),
         "api_key": api_key,
         "model_name": st.session_state.model_name,
@@ -113,15 +116,13 @@ webrtc_ctx = webrtc_streamer(
 )
 
 # --- 6. 画面表示 ---
-st.subheader("📝 補正済みテキスト")
-output_area = st.empty()
-
+# --- 6. 画面表示部分の修正 ---
 if webrtc_ctx.state.playing:
     while True:
         try:
-            # 準備ができるまで待機
-            if hasattr(webrtc_ctx, 'audio_worker') and webrtc_ctx.audio_worker:
-                new_line = webrtc_ctx.audio_worker.result_queue.get(timeout=1.0)
+            # 🔴 ここを修正: audio_worker -> audio_processor
+            if hasattr(webrtc_ctx, 'audio_processor') and webrtc_ctx.audio_processor:
+                new_line = webrtc_ctx.audio_processor.result_queue.get(timeout=1.0)
                 st.session_state.full_notes += new_line + "\n\n"
                 output_area.text_area("ノート", value=st.session_state.full_notes, height=500)
             else:
