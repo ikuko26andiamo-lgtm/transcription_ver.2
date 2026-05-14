@@ -22,11 +22,12 @@ def extract_terms(file, top_n=100):
     text = "\n".join([p.text for p in doc.paragraphs])
     
     # 辞書パスを環境に合わせて柔軟に設定
+    # Debian/Ubuntu系で mecab-ipadic-utf8 を入れた時の標準パスを指定
     try:
         tagger = MeCab.Tagger("-d /var/lib/mecab/dic/ipadic-utf8")
-    except:
+    except Exception:
+        # もし上記でダメな場合はデフォルト設定を試す
         tagger = MeCab.Tagger()
-        
     node = tagger.parseToNode(text)
     terms = []
     while node:
