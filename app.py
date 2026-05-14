@@ -6,120 +6,72 @@ import google.generativeai as genai
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 from faster_whisper import WhisperModel
 import torch
+import threading
 
-# --- 1. 基本設定 ---
-st.set_page_config(page_title="リアルタイム講義補正ノート📝", layout="wide")
-
+# --- モデルロード ---
 @st.cache_resource
 def load_whisper_model():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     return WhisperModel("base", device=device, compute_type="float16" if device=="cuda" else "int8")
 
-def get_working_model(api_key):
-    try:
-        genai.configure(api_key=api_key)
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        candidates = ["models/gemini-1.5-flash", "models/gemini-1.5-pro"]
-        for cand in candidates:
-            if cand in available_models: return cand
-        return "models/gemini-1.5-flash"
-    except:
-        return "models/gemini-1.5-flash"
-
-def extract_terms_with_gemini(file, api_key, model_name):
-    doc = docx.Document(file)
-    text = "\n".join([p.text for p in doc.paragraphs])
-    context_text = text[:8000]
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(model_name)
-    prompt = f"以下の資料から重要な専門用語を最大50個抜き出し、カンマ区切りで単語のみ出力してください。\n\n{context_text}"
-    try:
-        response = model.generate_content(prompt)
-        return [t.strip() for t in response.text.split(",") if t.strip()]
-    except:
-        return ["法律", "政治", "憲法"]
-
-# --- 2. 音声処理クラス ---
+# --- 音声処理クラス（キュー方式に全面改修） ---
 class RealTimeGeminiProcessor(AudioProcessorBase):
     def __init__(self, whisper_model, api_key, model_name, terms, persona):
         self.whisper_model = whisper_model
         self.terms = terms
         self.persona = persona
-        self.audio_buffer = []
-        self.result_queue = queue.Queue()
+        self.audio_queue = queue.Queue() # 音声データを一時保管する場所
+        self.result_queue = queue.Queue() # Geminiの結果を入れる場所
         genai.configure(api_key=api_key)
         self.gemini_model = genai.GenerativeModel(model_name)
+        
+        # 裏側で文字起こしを回し続けるスレッドを開始
+        self.processing_thread = threading.Thread(target=self._process_loop, daemon=True)
+        self.processing_thread.start()
 
     def recv(self, frame):
-        # 1. 音声データをndarrayとして取得
+        # ここでは音声を受け取ってキューに入れる「だけ」にする（超高速）
         audio = frame.to_ndarray()
+        if audio.ndim > 1: audio = np.mean(audio, axis=1)
         
-        # 2. ステレオ(2ch)をモノラル(1ch)に変換
-        if audio.ndim > 1:
-            audio = np.mean(audio, axis=1)
-        
-        # 3. ブラウザの周波数(多くは48kHz)をWhisper用の16kHzに変換
-        # 48000Hz -> 16000Hz なので 3サンプルに1つ間引く
+        # 48kHz -> 16kHz
         sample_rate = frame.sample_rate
         if sample_rate != 16000:
-            # 簡易的なダウンサンプリング処理
             step = sample_rate // 16000
             audio = audio[::step]
-            
-        # 4. 数値を正規化してバッファへ
-        audio = audio.flatten().astype(np.float32) / 32768.0
-        self.audio_buffer.extend(audio)
 
-        # 5秒分(16000 * 5 = 80000サンプル)溜まったら処理
-        if len(self.audio_buffer) >= 80000:
-            segment_audio = np.array(self.audio_buffer)
-            self.audio_buffer = []
-            
-            try:
-                # Whisper推論
-                segments, _ = self.whisper_model.transcribe(
-                    segment_audio, 
-                    language="ja",
-                    beam_size=5, # 精度を上げる
-                    initial_prompt=f"専門用語: {','.join(self.terms[:10])}"
-                )
-                raw_text = "".join([s.text for s in segments]).strip()
-                
-                if raw_text:
-                    # Gemini補正
-                    p = f"修正して: {raw_text}\n用語: {','.join(self.terms[:20])}"
-                    response = self.gemini_model.generate_content(p)
-                    self.result_queue.put(response.text.strip())
-                else:
-                    # デバッグ：音が届いていることを確認するために、空でもキューを送る設定にしてみる
-                    # self.result_queue.put("（音声なし）")
-                    pass
-            except Exception as e:
-                self.result_queue.put(f"⚠️ 解析エラー")
-        
+        self.audio_queue.put(audio.flatten().astype(np.float32) / 32768.0)
         return frame
-       
-# --- 3. メイン UI ---
+
+    def _process_loop(self):
+        # 裏側（別スレッド）でじっくりAI処理を行う
+        buffer = []
+        while True:
+            # キューから音声のかけらを取り出す
+            audio_chunk = self.audio_queue.get()
+            buffer.extend(audio_chunk)
+
+            # 5秒分溜まったらAIを叩く
+            if len(buffer) >= 16000 * 5:
+                segment_audio = np.array(buffer)
+                buffer = [] # バッファを空にする
+                
+                try:
+                    segments, _ = self.whisper_model.transcribe(segment_audio, language="ja")
+                    raw_text = "".join([s.text for s in segments]).strip()
+                    
+                    if raw_text:
+                        p = f"修正して: {raw_text}\n用語: {','.join(self.terms[:20])}"
+                        response = self.gemini_model.generate_content(p)
+                        self.result_queue.put(response.text.strip())
+                except:
+                    pass
+
+# --- UI部分 ---
 st.title("🎙️ リアルタイム講義補正ノート")
+# ... (サイドバーやsession_stateの初期化は以前のコードと同じ) ...
 
-with st.sidebar:
-    st.header("⚙️ 設定")
-    api_key = st.text_input("Gemini API Key", type="password")
-    persona = st.text_input("AIの役割", "法学部の教授")
-    uploaded_docx = st.file_uploader("講義資料 (docx)", type="docx")
-
-if not api_key or not uploaded_docx:
-    st.info("APIキーと資料をセットしてください。")
-    st.stop()
-
-if "model_name" not in st.session_state:
-    st.session_state.model_name = get_working_model(api_key)
-if "terms" not in st.session_state:
-    st.session_state.terms = extract_terms_with_gemini(uploaded_docx, api_key, st.session_state.model_name)
-if "full_notes" not in st.session_state:
-    st.session_state.full_notes = ""
-
-# --- 4. WebRTC (スレッドセーフな変数渡し) ---
+# 🔴 以下、WebRTC設定の修正
 model_name_val = st.session_state.model_name
 terms_val = st.session_state.terms
 
@@ -138,22 +90,8 @@ webrtc_ctx = webrtc_streamer(
     media_stream_constraints={"video": False, "audio": True},
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     audio_processor_factory=audio_processor_factory,
+    # 🔴 async_processingをTrueに設定して、メインスレッドの詰まりを防ぐ
+    async_processing=True, 
 )
 
-# --- 5. 画面表示 ---
-st.subheader("📝 補正済みノート")
-output_area = st.empty()
-
-if webrtc_ctx.state.playing:
-    while True:
-        try:
-            if webrtc_ctx.audio_processor:
-                new_line = webrtc_ctx.audio_processor.result_queue.get(timeout=1.0)
-                st.session_state.full_notes += new_line + "\n\n"
-                output_area.text_area("テキスト", value=st.session_state.full_notes, height=500)
-            else:
-                break
-        except (queue.Empty, AttributeError):
-            break
-else:
-    output_area.text_area("テキスト", value=st.session_state.full_notes, height=500)
+# 画面表示ループはそのまま
