@@ -8,7 +8,7 @@ from faster_whisper import WhisperModel
 import torch
 
 # --- 1. 基本設定 ---
-st.set_page_config(page_title="リアルタイム文字起こし📝", layout="wide")
+st.set_page_config(page_title="リアルタイム講義補正ノート📝", layout="wide")
 
 @st.cache_resource
 def load_whisper_model():
@@ -19,10 +19,10 @@ def get_working_model(api_key):
     try:
         genai.configure(api_key=api_key)
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        candidates = ["models/gemini-1.5-flash", "models/gemini-1.5-pro", "models/gemini-pro"]
+        candidates = ["models/gemini-1.5-flash", "models/gemini-1.5-pro"]
         for cand in candidates:
             if cand in available_models: return cand
-        return available_models[0] if available_models else "models/gemini-1.5-flash"
+        return "models/gemini-1.5-flash"
     except:
         return "models/gemini-1.5-flash"
 
@@ -37,7 +37,7 @@ def extract_terms_with_gemini(file, api_key, model_name):
         response = model.generate_content(prompt)
         return [t.strip() for t in response.text.split(",") if t.strip()]
     except:
-        return ["法律", "政治", "憲法", "国際関係"]
+        return ["法律", "政治", "憲法"]
 
 # --- 2. 音声処理クラス ---
 class RealTimeGeminiProcessor(AudioProcessorBase):
@@ -51,19 +51,36 @@ class RealTimeGeminiProcessor(AudioProcessorBase):
         self.gemini_model = genai.GenerativeModel(model_name)
 
     def recv(self, frame):
-        # 🟢 音声データをndarrayとして取得
+        # 音声データの取得と整形
         audio = frame.to_ndarray()
-        
-        # 🟢 ステレオ(2ch)の場合、モノラル(1ch)に平均化する処理を追加
-        if audio.ndim > 1:
+        if audio.ndim > 1: # ステレオをモノラルに変換
             audio = np.mean(audio, axis=1)
-            
-        # 16kHz, float32に変換してバッファへ
+        
         audio = audio.flatten().astype(np.float32) / 32768.0
         self.audio_buffer.extend(audio)
 
-        # 5秒(80000サンプル)溜まったら処理
+        # 5秒溜まったら処理
         if len(self.audio_buffer) >= 16000 * 5:
+            segment_audio = np.array(self.audio_buffer)
+            self.audio_buffer = []
+            try:
+                segments, _ = self.whisper_model.transcribe(
+                    segment_audio, language="ja",
+                    initial_prompt=f"用語: {','.join(self.terms[:10])}"
+                )
+                raw_text = "".join([s.text for s in segments]).strip()
+                
+                # 🔴 ここが 66行目の修正箇所：インデントを確実に通す
+                if raw_text:
+                    p = f"修正して: {raw_text}\n用語: {','.join(self.terms[:20])}"
+                    response = self.gemini_model.generate_content(p)
+                    self.result_queue.put(response.text.strip())
+                else:
+                    # 無音や認識不可の場合のデバッグ用（任意）
+                    pass
+            except Exception as e:
+                self.result_queue.put(f"⚠️ 処理エラー")
+        return frame
 
 # --- 3. メイン UI ---
 st.title("🎙️ リアルタイム講義補正ノート")
@@ -85,15 +102,11 @@ if "terms" not in st.session_state:
 if "full_notes" not in st.session_state:
     st.session_state.full_notes = ""
 
-# --- 4. WebRTC ストリーマー (AttributeError 回避版) ---
-
-# セッション状態から値をローカル変数にコピー（これ重要！）
-# スレッドが変わっても値が保持されるようにします
+# --- 4. WebRTC (スレッドセーフな変数渡し) ---
 model_name_val = st.session_state.model_name
 terms_val = st.session_state.terms
 
 def audio_processor_factory():
-    # ここで st.session_state を使わずに、外側のローカル変数を使う
     return RealTimeGeminiProcessor(
         whisper_model=load_whisper_model(),
         api_key=api_key,
@@ -111,20 +124,19 @@ webrtc_ctx = webrtc_streamer(
 )
 
 # --- 5. 画面表示 ---
-st.subheader("📝 補正済み講義文字起こし")
+st.subheader("📝 補正済みノート")
 output_area = st.empty()
 
 if webrtc_ctx.state.playing:
     while True:
         try:
-            # 最新仕様では audio_processor でアクセス
             if webrtc_ctx.audio_processor:
                 new_line = webrtc_ctx.audio_processor.result_queue.get(timeout=1.0)
                 st.session_state.full_notes += new_line + "\n\n"
-                output_area.text_area("ノート", value=st.session_state.full_notes, height=500)
+                output_area.text_area("テキスト", value=st.session_state.full_notes, height=500)
             else:
                 break
         except (queue.Empty, AttributeError):
             break
 else:
-    output_area.text_area("ノート", value=st.session_state.full_notes, height=500)
+    output_area.text_area("テキスト", value=st.session_state.full_notes, height=500)
