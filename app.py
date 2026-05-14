@@ -105,12 +105,17 @@ if "full_notes" not in st.session_state:
 
 st.success(f"キーワード抽出完了: {', '.join(st.session_state.terms[:10])}...")
 
+  
+
 # リアルタイム処理
 webrtc_ctx = webrtc_streamer(
     key="lecture-gemini",
     mode=WebRtcMode.SENDONLY,
     audio_receiver_size=1024,
     media_stream_constraints={"video": False, "audio": True},
+    rtc_configuration={
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    },
     worker_class=RealTimeGeminiProcessor,
     kwargs={
         "whisper_model": load_whisper_model(),
