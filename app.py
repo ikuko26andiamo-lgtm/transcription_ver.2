@@ -51,37 +51,54 @@ class RealTimeGeminiProcessor(AudioProcessorBase):
         self.gemini_model = genai.GenerativeModel(model_name)
 
     def recv(self, frame):
-        # 音声データの取得と整形
+        # 1. 音声データをndarrayとして取得
         audio = frame.to_ndarray()
-        if audio.ndim > 1: # ステレオをモノラルに変換
+        
+        # 2. ステレオ(2ch)をモノラル(1ch)に変換
+        if audio.ndim > 1:
             audio = np.mean(audio, axis=1)
         
+        # 3. ブラウザの周波数(多くは48kHz)をWhisper用の16kHzに変換
+        # 48000Hz -> 16000Hz なので 3サンプルに1つ間引く
+        sample_rate = frame.sample_rate
+        if sample_rate != 16000:
+            # 簡易的なダウンサンプリング処理
+            step = sample_rate // 16000
+            audio = audio[::step]
+            
+        # 4. 数値を正規化してバッファへ
         audio = audio.flatten().astype(np.float32) / 32768.0
         self.audio_buffer.extend(audio)
 
-        # 5秒溜まったら処理
-        if len(self.audio_buffer) >= 16000 * 5:
+        # 5秒分(16000 * 5 = 80000サンプル)溜まったら処理
+        if len(self.audio_buffer) >= 80000:
             segment_audio = np.array(self.audio_buffer)
             self.audio_buffer = []
+            
             try:
+                # Whisper推論
                 segments, _ = self.whisper_model.transcribe(
-                    segment_audio, language="ja",
-                    initial_prompt=f"用語: {','.join(self.terms[:10])}"
+                    segment_audio, 
+                    language="ja",
+                    beam_size=5, # 精度を上げる
+                    initial_prompt=f"専門用語: {','.join(self.terms[:10])}"
                 )
                 raw_text = "".join([s.text for s in segments]).strip()
                 
-                # 🔴 ここが 66行目の修正箇所：インデントを確実に通す
                 if raw_text:
+                    # Gemini補正
                     p = f"修正して: {raw_text}\n用語: {','.join(self.terms[:20])}"
                     response = self.gemini_model.generate_content(p)
                     self.result_queue.put(response.text.strip())
                 else:
-                    # 無音や認識不可の場合のデバッグ用（任意）
+                    # デバッグ：音が届いていることを確認するために、空でもキューを送る設定にしてみる
+                    # self.result_queue.put("（音声なし）")
                     pass
             except Exception as e:
-                self.result_queue.put(f"⚠️ 処理エラー")
+                self.result_queue.put(f"⚠️ 解析エラー")
+        
         return frame
-
+       
 # --- 3. メイン UI ---
 st.title("🎙️ リアルタイム講義補正ノート")
 
