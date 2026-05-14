@@ -51,25 +51,19 @@ class RealTimeGeminiProcessor(AudioProcessorBase):
         self.gemini_model = genai.GenerativeModel(model_name)
 
     def recv(self, frame):
-        audio = frame.to_ndarray().flatten().astype(np.float32) / 32768.0
+        # 🟢 音声データをndarrayとして取得
+        audio = frame.to_ndarray()
+        
+        # 🟢 ステレオ(2ch)の場合、モノラル(1ch)に平均化する処理を追加
+        if audio.ndim > 1:
+            audio = np.mean(audio, axis=1)
+            
+        # 16kHz, float32に変換してバッファへ
+        audio = audio.flatten().astype(np.float32) / 32768.0
         self.audio_buffer.extend(audio)
 
-        if len(self.audio_buffer) >= 16000 * 3: # 3秒間隔
-            segment_audio = np.array(self.audio_buffer)
-            self.audio_buffer = []
-            try:
-                segments, _ = self.whisper_model.transcribe(
-                    segment_audio, language="ja",
-                    initial_prompt=f"用語: {','.join(self.terms[:10])}"
-                )
-                raw_text = "".join([s.text for s in segments]).strip()
-                if raw_text:
-                    p = f"あなたは{self.persona}です。以下の文を資料の用語を参考に修正して。文章のみ出力。\n用語: {','.join(self.terms[:20])}\n文: {raw_text}"
-                    response = self.gemini_model.generate_content(p)
-                    self.result_queue.put(response.text.strip())
-            except:
-                pass
-        return frame
+        # 5秒(80000サンプル)溜まったら処理
+        if len(self.audio_buffer) >= 16000 * 5:
 
 # --- 3. メイン UI ---
 st.title("🎙️ リアルタイム講義補正ノート")
