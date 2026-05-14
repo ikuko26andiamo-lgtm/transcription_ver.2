@@ -20,14 +20,24 @@ def load_whisper_model():
 def extract_terms(file, top_n=100):
     doc = docx.Document(file)
     text = "\n".join([p.text for p in doc.paragraphs])
-    
-    # 辞書パスを環境に合わせて柔軟に設定
-    # Debian/Ubuntu系で mecab-ipadic-utf8 を入れた時の標準パスを指定
-    try:
-        tagger = MeCab.Tagger("-d /var/lib/mecab/dic/ipadic-utf8")
-    except Exception:
-        # もし上記でダメな場合はデフォルト設定を試す
-        tagger = MeCab.Tagger()
+    dic_paths = [
+        "/var/lib/mecab/dic/ipadic-utf8",
+        "/usr/lib/x86_64-linux-gnu/mecab/dic/ipadic",
+        "/usr/lib/x86_64-linux-gnu/mecab/dic/ipadic-utf8",
+        "/usr/local/lib/mecab/dic/ipadic"
+    ]
+    tagger = None
+    for path in dic_paths:
+        try:
+            t = MeCab.Tagger(f"-d {path}")
+            t.parse("") # テスト動作
+            tagger = t
+            break
+        except:
+            continue
+            
+    if tagger is None:
+        tagger = MeCab.Tagger() # 最終手段（デフォルト）
     node = tagger.parseToNode(text)
     terms = []
     while node:
