@@ -8,6 +8,42 @@ from faster_whisper import WhisperModel
 import torch
 import threading
 
+# --- 1. インポートと基本設定 ---
+st.set_page_config(page_title="リアルタイム講義補正ノート📝", layout="wide")
+
+# --- 2. session_state の初期化（最優先で実行） ---
+if "model_name" not in st.session_state:
+    st.session_state.model_name = "models/gemini-1.5-flash" # デフォルト値
+if "terms" not in st.session_state:
+    st.session_state.terms = []
+if "full_notes" not in st.session_state:
+    st.session_state.full_notes = ""
+
+# --- 3. サイドバー設定 ---
+with st.sidebar:
+    st.header("⚙️ 設定")
+    api_key = st.text_input("Gemini API Key", type="password")
+    persona = st.text_input("AIの役割", "法学部の教授")
+    uploaded_docx = st.file_uploader("講義資料 (docx)", type="docx")
+
+# 入力チェック
+if not api_key or not uploaded_docx:
+    st.info("APIキーと資料をセットしてください。")
+    st.stop()
+
+# --- 4. 実際のモデル決定と用語抽出（ここで行う） ---
+# キーが入力された後に、正しいモデル名や用語を上書きする
+if not st.session_state.terms: 
+    with st.spinner("接続確認 & 資料分析中..."):
+        st.session_state.model_name = get_working_model(api_key)
+        st.session_state.terms = extract_terms_with_gemini(uploaded_docx, api_key, st.session_state.model_name)
+
+# --- 5. WebRTC への変数受け渡し（必ず session_state が確定した後） ---
+model_name_val = st.session_state.model_name
+terms_val = st.session_state.terms
+
+# ... (以下、audio_processor_factory や webrtc_streamer の定義) ...
+
 # --- モデルロード ---
 @st.cache_resource
 def load_whisper_model():
