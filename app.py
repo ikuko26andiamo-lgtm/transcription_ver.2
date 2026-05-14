@@ -91,14 +91,20 @@ if "terms" not in st.session_state:
 if "full_notes" not in st.session_state:
     st.session_state.full_notes = ""
 
-# --- 4. WebRTC ストリーマー (最新仕様: audio_processor_factory) ---
-# クラスをインスタンス化して返す関数を定義
+# --- 4. WebRTC ストリーマー (AttributeError 回避版) ---
+
+# セッション状態から値をローカル変数にコピー（これ重要！）
+# スレッドが変わっても値が保持されるようにします
+model_name_val = st.session_state.model_name
+terms_val = st.session_state.terms
+
 def audio_processor_factory():
+    # ここで st.session_state を使わずに、外側のローカル変数を使う
     return RealTimeGeminiProcessor(
         whisper_model=load_whisper_model(),
         api_key=api_key,
-        model_name=st.session_state.model_name,
-        terms=st.session_state.terms,
+        model_name=model_name_val,
+        terms=terms_val,
         persona=persona
     )
 
@@ -107,7 +113,6 @@ webrtc_ctx = webrtc_streamer(
     mode=WebRtcMode.SENDONLY,
     media_stream_constraints={"video": False, "audio": True},
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    # 🔴 ここが最新の指定方法です
     audio_processor_factory=audio_processor_factory,
 )
 
