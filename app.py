@@ -2,11 +2,9 @@ import streamlit as st
 import numpy as np
 import queue
 import docx
-import MeCab
-from collections import Counter
+import google.generativeai as genai
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 from faster_whisper import WhisperModel
-import google.generativeai as genai
 import torch
 
 # --- 設定とモデルロード ---
@@ -16,45 +14,33 @@ st.set_page_config(page_title="リアルタイム専門用語補正ノート📝
 def load_whisper_model():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     return WhisperModel("base", device=device, compute_type="float16" if device=="cuda" else "int8")
-def extract_terms(file, top_n=100):
+
+# MeCabの代わりにGeminiを使ってキーワードを抽出する
+def extract_terms_with_gemini(file, api_key, model_name):
     doc = docx.Document(file)
     text = "\n".join([p.text for p in doc.paragraphs])
     
-    # 辞書候補（環境によって異なるため、網羅的に指定）
-    tagger = None
-    paths = [
-        "/var/lib/mecab/dic/ipadic-utf8",
-        "/usr/lib/x86_64-linux-gnu/mecab/dic/ipadic",
-        "/usr/lib/x86_64-linux-gnu/mecab/dic/ipadic-utf8",
-        "/usr/share/mecab/dic/ipadic",
-        "/etc/alternatives/mecab-dictionary"
-    ]
-    
-    for p in paths:
-        try:
-            t = MeCab.Tagger(f"-d {p}")
-            t.parse("") # 動作確認
-            tagger = t
-            break
-        except:
-            continue
-            
-    if tagger is None:
-        # 最終手段：それでもダメな場合は、Dockerfileに以下の1行があるか確認してください
-        # RUN apt-get install -y mecab mecab-ipadic-utf8
-        tagger = MeCab.Tagger() 
+    # 資料が長すぎる場合、前半1万文字程度を対象にする
+    context_text = text[:10000]
 
-    node = tagger.parseToNode(text)
-    terms = []
-    while node:
-        features = node.feature.split(',')
-        if features[0] == "名詞":
-            word = node.surface
-            if len(word) >= 3 or any(0x30A0 <= ord(c) <= 0x30FF for c in word):
-                if len(word) >= 2:
-                    terms.append(word)
-        node = node.next
-    return [term for term, count in Counter(terms).most_common(top_n)]
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_name)
+    
+    prompt = f"""
+以下の講義資料から、リアルタイム文字起こしの補正に役立つ「専門用語・人名・固有名詞」を最大60個、重要度順に抜き出してください。
+余計な解説は不要です。カンマ区切りで単語のみを出力してください。
+
+【資料】:
+{context_text}
+"""
+    try:
+        response = model.generate_content(prompt)
+        # カンマ区切りの文字列をリスト化
+        terms = [t.strip() for t in response.text.split(",") if t.strip()]
+        return terms
+    except Exception as e:
+        st.error(f"キーワード分析に失敗しました: {e}")
+        return ["法律", "政治"] # 最低限のフォールバック
 
 # --- 音声 & Gemini 処理クラス ---
 class RealTimeGeminiProcessor(AudioProcessorBase):
@@ -75,17 +61,23 @@ class RealTimeGeminiProcessor(AudioProcessorBase):
         if len(self.audio_buffer) >= 16000 * 3:
             segment_audio = np.array(self.audio_buffer)
             self.audio_buffer = []
+            
+            # Whisperで仮起こし
             segments, _ = self.whisper_model.transcribe(
-                segment_audio, language="ja", initial_prompt=f"用語: {','.join(self.terms[:10])}"
+                segment_audio, 
+                language="ja",
+                initial_prompt=f"専門用語: {','.join(self.terms[:10])}"
             )
             raw_text = "".join([s.text for s in segments]).strip()
+
             if raw_text:
+                # Geminiで補正
                 corrected = self.correct_with_gemini(raw_text)
                 self.result_queue.put(corrected)
         return frame
 
     def correct_with_gemini(self, text):
-        prompt = f"あなたは{self.persona}です。以下の「聞き取り」を、用語リストを参考に修正してください。修正後の文章のみ出力すること。解説不要。\n用語リスト: {','.join(self.terms)}\n聞き取り: {text}"
+        prompt = f"あなたは{self.persona}です。以下の「聞き取り」を用語リストを参考に正しく修正してください。修正後の文章のみ出力。解説不要。\n用語: {','.join(self.terms)}\n聞き取り: {text}"
         try:
             response = self.gemini_model.generate_content(prompt)
             return response.text.strip()
@@ -106,8 +98,10 @@ if not api_key or not uploaded_docx:
     st.info("APIキーの入力と資料のアップロードを行ってください。")
     st.stop()
 
+# セッション管理
 if "terms" not in st.session_state:
-    st.session_state.terms = extract_terms(uploaded_docx)
+    with st.spinner("Geminiが講義資料を分析中..."):
+        st.session_state.terms = extract_terms_with_gemini(uploaded_docx, api_key, selected_model)
 if "full_notes" not in st.session_state:
     st.session_state.full_notes = ""
 
